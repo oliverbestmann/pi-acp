@@ -31,7 +31,7 @@ import { SessionStore } from './session-store.js'
 import { PiRpcProcess } from '../pi-rpc/process.js'
 import { listPiSessions, findPiSession, readPiSessionTitle } from './pi-sessions.js'
 import { customMessageToolCall, normalizePiAssistantText, normalizePiMessageText } from './translate/pi-messages.js'
-import { toolResultToText } from './translate/pi-tools.js'
+import { toolResultToText, toolTitle } from './translate/pi-tools.js'
 import {
   bashCommand,
   bashExitCode,
@@ -989,6 +989,7 @@ export class PiAcpAgent implements ACPAgent {
     // Replay full conversation history.
     const data = (await proc.getMessages()) as any
     const messages = Array.isArray(data?.messages) ? data.messages : []
+    const toolArgs = new Map<string, unknown>()
 
     for (const m of messages) {
       const role = String(m?.role ?? '')
@@ -1009,6 +1010,12 @@ export class PiAcpAgent implements ACPAgent {
               content: { type: 'text', text }
             }
           })
+        }
+      }
+
+      if (role === 'assistant' && Array.isArray(m?.content)) {
+        for (const c of m.content) {
+          if (c?.type === 'toolCall' && c.id) toolArgs.set(String(c.id), c.arguments)
         }
       }
 
@@ -1067,10 +1074,10 @@ export class PiAcpAgent implements ACPAgent {
           update: {
             sessionUpdate: 'tool_call',
             toolCallId,
-            title: toolName,
+            title: toolTitle(toolName, toolArgs.get(toolCallId)),
             kind: toolName === 'read' ? 'read' : toolName === 'write' || toolName === 'edit' ? 'edit' : 'other',
             status: 'completed',
-            rawInput: null,
+            rawInput: toolArgs.get(toolCallId) ?? null,
             rawOutput: m
           }
         })

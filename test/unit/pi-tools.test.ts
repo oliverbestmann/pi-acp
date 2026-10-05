@@ -13,6 +13,7 @@ test('toolTitle: describes file, search, and custom tool inputs', () => {
     toolTitle('mcp', { tool: 'jflow_commit', args: { message: 'test', path: '/home/oliver/github/jflow' } }),
     'mcp jflow_commit /home/oliver/github/jflow'
   )
+  assert.equal(toolTitle('mcp', { describe: 'jflow_commit' }), 'mcp describe jflow_commit')
 })
 
 test('toolTitle: ignores unsafe or incomplete input and bounds titles', () => {

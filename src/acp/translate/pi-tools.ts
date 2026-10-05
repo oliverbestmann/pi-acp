@@ -90,8 +90,15 @@ export function toolTitle(toolName: string, args: unknown): string {
   }
 
   // MCP gateway calls wrap the real tool: { tool: "jflow_commit", args: {...} }.
-  const innerTool = toolName === 'mcp' ? titleValue(input.tool) : undefined
+  const innerTool = /^mcp/.test(toolName) ? titleValue(input.tool) : undefined
   if (innerTool) return truncateTitle(`${toolName} ${toolTitle(innerTool, input.args)}`)
+
+  if (/^mcp/.test(toolName)) {
+    for (const key of ['describe', 'search', 'connect', 'instructions', 'server']) {
+      const value = titleValue(input[key])
+      if (value) return truncateTitle(`${toolName} ${key} ${value}`)
+    }
+  }
 
   const action = titleValue(input.action)
   const query = titleValue(input.query)
