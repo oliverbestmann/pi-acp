@@ -1,3 +1,49 @@
+const MAX_TOOL_TITLE_LENGTH = 160
+const TITLE_ARG_KEYS = [
+  'path',
+  'file_path',
+  'pattern',
+  'glob',
+  'query',
+  'url',
+  'target',
+  'action',
+  'name',
+  'id'
+] as const
+
+function titleValue(value: unknown): string | undefined {
+  if (typeof value !== 'string' && typeof value !== 'number') return undefined
+  const text = String(value).replace(/\s+/g, ' ').trim()
+  return text || undefined
+}
+
+function truncateTitle(title: string): string {
+  return title.length <= MAX_TOOL_TITLE_LENGTH ? title : `${title.slice(0, MAX_TOOL_TITLE_LENGTH - 1)}…`
+}
+
+export function toolTitle(toolName: string, args: unknown): string {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return toolName
+
+  const input = args as Record<string, unknown>
+  const pattern = titleValue(input.pattern)
+  if (toolName === 'grep' && pattern) {
+    const scope = titleValue(input.path) ?? titleValue(input.glob)
+    return truncateTitle(`${toolName} ${JSON.stringify(pattern)}${scope ? ` in ${scope}` : ''}`)
+  }
+
+  const action = titleValue(input.action)
+  const query = titleValue(input.query)
+  if (action && query) return truncateTitle(`${toolName} ${action} ${JSON.stringify(query)}`)
+
+  for (const key of TITLE_ARG_KEYS) {
+    const value = titleValue(input[key])
+    if (value) return truncateTitle(`${toolName} ${value}`)
+  }
+
+  return toolName
+}
+
 export function toolResultToText(result: unknown): string {
   if (!result) return ''
 

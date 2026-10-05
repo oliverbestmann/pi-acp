@@ -143,7 +143,44 @@ test('PiAcpSession: emits tool locations from pi path args', async () => {
 
   assert.equal(conn.updates.length, 1)
   assert.equal(conn.updates[0]!.update.sessionUpdate, 'tool_call')
+  assert.equal((conn.updates[0]!.update as any).title, 'read src/acp/session.ts')
   assert.deepEqual((conn.updates[0]!.update as any).locations, [{ path: `${process.cwd()}/src/acp/session.ts` }])
+})
+
+test('PiAcpSession: updates tool title as streamed arguments become available', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  proc.emit({
+    type: 'message_update',
+    assistantMessageEvent: {
+      type: 'toolcall_start',
+      toolCall: { id: 't1', name: 'grep', partialArgs: '{"pattern":' }
+    }
+  })
+  proc.emit({
+    type: 'message_update',
+    assistantMessageEvent: {
+      type: 'toolcall_end',
+      toolCall: { id: 't1', name: 'grep', arguments: { pattern: 'tool_call', path: 'src/acp' } }
+    }
+  })
+
+  await new Promise(r => setTimeout(r, 0))
+
+  assert.equal(conn.updates.length, 2)
+  assert.equal((conn.updates[0]!.update as any).title, 'grep')
+  assert.equal(conn.updates[1]!.update.sessionUpdate, 'tool_call_update')
+  assert.equal((conn.updates[1]!.update as any).title, 'grep "tool_call" in src/acp')
 })
 
 test('PiAcpSession: handles extension select via ACP permission request', async () => {

@@ -32,7 +32,7 @@ import {
   bashTerminalOutputMeta,
   isBashTool
 } from './translate/bash.js'
-import { toolResultToText } from './translate/pi-tools.js'
+import { toolResultToText, toolTitle } from './translate/pi-tools.js'
 
 type SessionCreateParams = {
   cwd: string
@@ -712,7 +712,7 @@ export class PiAcpSession {
               this.emit({
                 sessionUpdate: 'tool_call',
                 toolCallId,
-                title: toolName,
+                title: toolTitle(toolName, rawInput),
                 kind: toToolKind(toolName),
                 status,
                 locations,
@@ -724,6 +724,7 @@ export class PiAcpSession {
               this.emit({
                 sessionUpdate: 'tool_call_update',
                 toolCallId,
+                title: toolTitle(toolName, rawInput),
                 status,
                 locations,
                 rawInput
@@ -793,7 +794,7 @@ export class PiAcpSession {
           this.emit({
             sessionUpdate: 'tool_call',
             toolCallId,
-            title: toolName,
+            title: toolTitle(toolName, args),
             kind: toToolKind(toolName),
             status: 'in_progress',
             locations,
@@ -804,6 +805,7 @@ export class PiAcpSession {
           this.emit({
             sessionUpdate: 'tool_call_update',
             toolCallId,
+            title: toolTitle(toolName, args),
             status: 'in_progress',
             locations,
             rawInput: args
