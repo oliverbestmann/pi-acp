@@ -552,6 +552,7 @@ export class PiAcpAgent implements ACPAgent {
           return { stopReason: 'end_turn' }
         }
 
+        session.noteSessionNameSet(name)
         await this.conn.sessionUpdate({
           sessionId: session.sessionId,
           update: {

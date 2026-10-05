@@ -52,7 +52,8 @@ test('PiAcpAgent: /name sets session display name adapter-side', async () => {
         sessionId: 's1',
         update: { sessionUpdate: 'session_info_update', title: name }
       } as any)
-    }
+    },
+    noteSessionNameSet: () => {}
   }) as any
 
   const res = await agent.prompt({

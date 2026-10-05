@@ -30,6 +30,7 @@ import {
   bashTerminalExitMeta,
   bashTerminalInfoMeta,
   bashTerminalOutputMeta,
+  capBashOutput,
   isBashTool
 } from './translate/bash.js'
 import { toolResultToText, toolTitle } from './translate/pi-tools.js'
@@ -244,7 +245,8 @@ export class SessionManager {
       proc,
       conn: params.conn,
       fileCommands: params.fileCommands ?? [],
-      autoTitle: true
+      autoTitle: true,
+      initialSessionName: typeof state?.sessionName === 'string' ? state.sessionName : undefined
     })
 
     this.sessions.set(sessionId, session)
@@ -323,6 +325,9 @@ export class PiAcpSession {
   // Ensure `session/update` notifications are sent in order and can be awaited
   // before completing a `session/prompt` request.
   private lastEmit: Promise<void> = Promise.resolve()
+  private lastSessionName: string | undefined
+  private lastUsageCheckAt = 0
+  private usageCheckInFlight = false
 
   constructor(opts: {
     sessionId: string
@@ -332,6 +337,7 @@ export class PiAcpSession {
     conn: AgentSideConnection
     fileCommands?: FileSlashCommand[]
     autoTitle?: boolean
+    initialSessionName?: string
   }) {
     this.sessionId = opts.sessionId
     this.cwd = opts.cwd
@@ -340,8 +346,82 @@ export class PiAcpSession {
     this.conn = opts.conn
     this.fileCommands = opts.fileCommands ?? []
     this.initialTitlePending = opts.autoTitle ?? false
+    this.lastSessionName = opts.initialSessionName
 
     this.proc.onEvent(ev => this.handlePiEvent(ev))
+  }
+
+  /** Record a session name we just set ourselves (e.g. via `/name`), to avoid re-announcing it. */
+  noteSessionNameSet(name: string): void {
+    this.lastSessionName = name
+  }
+
+  /**
+   * Pi has no push event for context-window usage. Poll `get_session_stats` and emit ACP
+   * `usage_update` so clients can render a context/cost meter. Called once per turn on
+   * settlement, and throttled during streaming (see `maybeCheckUsageWhileStreaming`) so long
+   * turns don't leave the meter stale until the very end.
+   */
+  private async checkUsageChanged(): Promise<void> {
+    if (this.usageCheckInFlight) return
+    this.usageCheckInFlight = true
+    this.lastUsageCheckAt = Date.now()
+    try {
+      let stats: unknown
+      try {
+        stats = await this.proc.getSessionStats()
+      } catch {
+        return
+      }
+
+      const s = stats as { contextUsage?: { tokens?: unknown; contextWindow?: unknown }; cost?: unknown } | null
+      const used = s?.contextUsage?.tokens
+      const size = s?.contextUsage?.contextWindow
+      if (typeof used !== 'number' || typeof size !== 'number') return
+
+      const cost = typeof s?.cost === 'number' ? { amount: s.cost, currency: 'USD' } : null
+
+      this.emit({
+        sessionUpdate: 'usage_update',
+        used,
+        size,
+        cost
+      })
+    } finally {
+      this.usageCheckInFlight = false
+    }
+  }
+
+  /**
+   * During a long turn, pi streams assistant text/thinking token deltas continuously.
+   * Piggyback on that stream to refresh the usage meter roughly every 2s instead of only
+   * once the whole turn settles, without spamming `get_session_stats` on every token.
+   */
+  private maybeCheckUsageWhileStreaming(): void {
+    if (Date.now() - this.lastUsageCheckAt < 2000) return
+    void this.checkUsageChanged()
+  }
+
+  /**
+   * Pi has no RPC event for session renames made outside the `/name` command (e.g. another
+   * extension calling `pi.setSessionName()` directly). Poll `get_state` after each turn settles
+   * and diff against the last known name, emitting `session_info_update` on change.
+   */
+  private async checkSessionNameChanged(): Promise<void> {
+    let state: unknown
+    try {
+      state = await this.proc.getState()
+    } catch {
+      return
+    }
+
+    const name = (state as { sessionName?: unknown } | null)?.sessionName
+    const current = typeof name === 'string' ? name : undefined
+    if (current === this.lastSessionName) return
+
+    this.lastSessionName = current
+    // publishTitle dedupes against titles already sent via /name or auto-titling.
+    void this.publishTitle(current ?? null)
   }
 
   setStartupInfo(text: string) {
@@ -566,7 +646,7 @@ export class PiAcpSession {
     result: unknown
     isError?: boolean
   }): void {
-    const text = bashResultText(params.result)
+    const text = capBashOutput(bashResultText(params.result))
     const previous = this.bashOutputSnapshots.get(params.toolCallId) ?? ''
     const delta = bashOutputDelta(previous, text)
     this.bashOutputSnapshots.set(params.toolCallId, text)
@@ -654,6 +734,7 @@ export class PiAcpSession {
             sessionUpdate: 'agent_message_chunk',
             content: { type: 'text', text: ame.delta } satisfies ContentBlock
           })
+          this.maybeCheckUsageWhileStreaming()
           break
         }
 
@@ -662,6 +743,7 @@ export class PiAcpSession {
             sessionUpdate: 'agent_thought_chunk',
             content: { type: 'text', text: ame.delta } satisfies ContentBlock
           })
+          this.maybeCheckUsageWhileStreaming()
           break
         }
 
@@ -967,6 +1049,8 @@ export class PiAcpSession {
       }
 
       case 'agent_settled': {
+        // settleTurn() publishes the final usage update, so only the name check is needed here.
+        void this.checkSessionNameChanged()
         void this.settleTurn()
         break
       }

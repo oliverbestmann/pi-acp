@@ -80,6 +80,20 @@ export function bashOutputDelta(previous: string, next: string): string {
   return next.startsWith(previous) ? next.slice(previous.length) : next
 }
 
+// Cap total bash/terminal output forwarded to the ACP client. Our terminal display is a
+// `_meta` append-only stream (not the real ACP `createTerminal`, which would re-execute the
+// command client-side), so we can't truncate from the head and keep the tail like a real
+// terminal's scrollback. Instead cap from the tail: once the limit is hit, the capped text is
+// stable, so later calls naturally stop producing further deltas.
+const MAX_BASH_OUTPUT_CHARS = 20_000
+
+export function capBashOutput(text: string, limit = MAX_BASH_OUTPUT_CHARS): string {
+  if (text.length <= limit) return text
+  // Keep the marker length-independent of the total size, so the capped result is identical
+  // no matter how much more output keeps arriving after the limit is hit (see comment above).
+  return `${text.slice(0, limit)}\n\n...(truncated, output exceeds ${limit} characters)...`
+}
+
 export function bashTerminalContent(toolCallId: string): ToolCallContent[] {
   return [{ type: 'terminal', terminalId: toolCallId }] satisfies ToolCallContent[]
 }

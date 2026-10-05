@@ -1,4 +1,8 @@
 const MAX_TOOL_TITLE_LENGTH = 160
+// Tool output is shown as a plain (non-collapsible) content block in ACP clients, so cap it
+// to keep huge command/file output from flooding the chat. Keep head and tail so both the
+// start of a long listing and a trailing error/summary stay visible.
+const MAX_TOOL_OUTPUT_LENGTH = 20_000
 const TITLE_ARG_KEYS = [
   'path',
   'file_path',
@@ -20,6 +24,18 @@ function titleValue(value: unknown): string | undefined {
 
 function truncateTitle(title: string): string {
   return title.length <= MAX_TOOL_TITLE_LENGTH ? title : `${title.slice(0, MAX_TOOL_TITLE_LENGTH - 1)}…`
+}
+
+function truncateToolOutput(text: string): string {
+  if (text.length <= MAX_TOOL_OUTPUT_LENGTH) return text
+
+  const headLength = Math.floor(MAX_TOOL_OUTPUT_LENGTH * 0.7)
+  const tailLength = MAX_TOOL_OUTPUT_LENGTH - headLength
+  const omitted = text.length - headLength - tailLength
+  const head = text.slice(0, headLength)
+  const tail = text.slice(text.length - tailLength)
+
+  return `${head}\n\n...(truncated ${omitted} characters)...\n\n${tail}`
 }
 
 export function toolTitle(toolName: string, args: unknown): string {
@@ -52,7 +68,7 @@ export function toolResultToText(result: unknown): string {
   // pi's edit tool returns a terse success message in content and the full unified diff in details.diff.
   const diff = details?.diff
   if (typeof diff === 'string' && diff.trim()) {
-    return diff
+    return truncateToolOutput(diff)
   }
 
   // pi tool results generally look like: { content: [{type:"text", text:"..."}], details: {...} }
@@ -61,7 +77,7 @@ export function toolResultToText(result: unknown): string {
     const texts = content
       .map((c: any) => (c?.type === 'text' && typeof c.text === 'string' ? c.text : ''))
       .filter(Boolean)
-    if (texts.length) return texts.join('')
+    if (texts.length) return truncateToolOutput(texts.join(''))
   }
 
   // The bash tool frequently returns stdout/stderr in `details` rather than content blocks.
@@ -86,11 +102,11 @@ export function toolResultToText(result: unknown): string {
     if (typeof stdout === 'string' && stdout.trim()) parts.push(stdout)
     if (typeof stderr === 'string' && stderr.trim()) parts.push(`stderr:\n${stderr}`)
     if (typeof exitCode === 'number') parts.push(`exit code: ${exitCode}`)
-    return parts.join('\n\n').trimEnd()
+    return truncateToolOutput(parts.join('\n\n').trimEnd())
   }
 
   try {
-    return JSON.stringify(result, null, 2)
+    return truncateToolOutput(JSON.stringify(result, null, 2))
   } catch {
     return String(result)
   }

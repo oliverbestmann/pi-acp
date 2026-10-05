@@ -54,3 +54,13 @@ test('toolResultToText: extracts bash stdout/stderr from details', () => {
   assert.match(text, /warn/)
   assert.match(text, /exit code: 0/)
 })
+
+test('toolResultToText: truncates very long output, keeping head and tail', () => {
+  const long = 'A'.repeat(15_000) + 'MIDDLE' + 'B'.repeat(15_000)
+  const text = toolResultToText({ content: [{ type: 'text', text: long }] })
+  assert.ok(text.length < long.length)
+  assert.match(text, /^A+/)
+  assert.match(text, /B+$/)
+  assert.match(text, /truncated \d+ characters/)
+  assert.doesNotMatch(text, /MIDDLE/)
+})
