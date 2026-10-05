@@ -6,9 +6,11 @@ type SessionUpdateMsg = Parameters<AgentSideConnection['sessionUpdate']>[0]
 export class FakeAgentSideConnection {
   readonly updates: SessionUpdateMsg[] = []
   readonly permissionRequests: unknown[] = []
+  readonly elicitationRequests: unknown[] = []
   nextPermissionResponse: { outcome: { outcome: 'selected'; optionId: string } | { outcome: 'cancelled' } } = {
     outcome: { outcome: 'selected', optionId: 'allow' }
   }
+  nextElicitationResponse: unknown = { action: 'cancel' }
 
   async sessionUpdate(msg: SessionUpdateMsg): Promise<void> {
     this.updates.push(msg)
@@ -19,6 +21,11 @@ export class FakeAgentSideConnection {
   ): Promise<{ outcome: { outcome: 'selected'; optionId: string } | { outcome: 'cancelled' } }> {
     this.permissionRequests.push(params)
     return this.nextPermissionResponse
+  }
+
+  async unstable_createElicitation(params: unknown): Promise<unknown> {
+    this.elicitationRequests.push(params)
+    return this.nextElicitationResponse
   }
 }
 

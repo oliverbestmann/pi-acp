@@ -132,6 +132,11 @@ export class PiAcpAgent implements ACPAgent {
   // Remember recent session cwd and use it as the default filter.
   private lastSessionCwd: string | null = null
 
+  // Whether the client advertised `clientCapabilities.elicitation.form` at initialize, i.e.
+  // whether we can use `unstable_createElicitation` to map pi's `input`/`editor` UI requests
+  // to a free-text prompt instead of auto-cancelling them.
+  private supportsElicitationForm = false
+
   constructor(conn: AgentSideConnection, _config?: unknown) {
     this.conn = conn
     void _config
@@ -215,7 +220,8 @@ export class PiAcpAgent implements ACPAgent {
         mcpServers: opts?.mcpServers ?? [],
         conn: this.conn,
         proc,
-        fileCommands
+        fileCommands,
+        supportsElicitationForm: this.supportsElicitationForm
       })
 
       this.lastSessionCwd = cwd
@@ -240,6 +246,8 @@ export class PiAcpAgent implements ACPAgent {
     // We currently only support ACP protocol version 1.
     const supportedVersion = 1
     const requested = params.protocolVersion
+
+    this.supportsElicitationForm = params.clientCapabilities?.elicitation?.form != null
 
     return {
       protocolVersion: requested === supportedVersion ? requested : supportedVersion,
@@ -287,7 +295,8 @@ export class PiAcpAgent implements ACPAgent {
       mcpServers: params.mcpServers,
       conn: this.conn,
       fileCommands,
-      piCommand: process.env.PI_ACP_PI_COMMAND
+      piCommand: process.env.PI_ACP_PI_COMMAND,
+      supportsElicitationForm: this.supportsElicitationForm
     })
 
     // Fetch state + models once (parallel) to reduce startup latency.

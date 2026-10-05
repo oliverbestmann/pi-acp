@@ -1,6 +1,7 @@
 import type {
   AgentSideConnection,
   ContentBlock,
+  CreateElicitationResponse,
   McpServer,
   PermissionOption,
   SessionUpdate,
@@ -41,6 +42,7 @@ type SessionCreateParams = {
   conn: AgentSideConnection
   fileCommands?: import('./slash-commands.js').FileSlashCommand[]
   piCommand?: string
+  supportsElicitationForm?: boolean
 }
 
 export type StopReason = 'end_turn' | 'cancelled' | 'error'
@@ -246,7 +248,8 @@ export class SessionManager {
       conn: params.conn,
       fileCommands: params.fileCommands ?? [],
       autoTitle: true,
-      initialSessionName: typeof state?.sessionName === 'string' ? state.sessionName : undefined
+      initialSessionName: typeof state?.sessionName === 'string' ? state.sessionName : undefined,
+      supportsElicitationForm: params.supportsElicitationForm ?? false
     })
 
     this.sessions.set(sessionId, session)
@@ -274,7 +277,8 @@ export class SessionManager {
       proc: params.proc,
       conn: params.conn,
       fileCommands: params.fileCommands ?? [],
-      autoTitle: false
+      autoTitle: false,
+      supportsElicitationForm: params.supportsElicitationForm ?? false
     })
 
     this.sessions.set(sessionId, session)
@@ -296,6 +300,7 @@ export class PiAcpSession {
   readonly proc: PiRpcProcess
   private readonly conn: AgentSideConnection
   private readonly fileCommands: FileSlashCommand[]
+  private readonly supportsElicitationForm: boolean
 
   // Used to map abort semantics to ACP stopReason.
   // Applies to the currently running turn.
@@ -338,6 +343,7 @@ export class PiAcpSession {
     fileCommands?: FileSlashCommand[]
     autoTitle?: boolean
     initialSessionName?: string
+    supportsElicitationForm?: boolean
   }) {
     this.sessionId = opts.sessionId
     this.cwd = opts.cwd
@@ -347,6 +353,7 @@ export class PiAcpSession {
     this.fileCommands = opts.fileCommands ?? []
     this.initialTitlePending = opts.autoTitle ?? false
     this.lastSessionName = opts.initialSessionName
+    this.supportsElicitationForm = opts.supportsElicitationForm ?? false
 
     this.proc.onEvent(ev => this.handlePiEvent(ev))
   }
@@ -1078,11 +1085,16 @@ export class PiAcpSession {
     }
 
     if (method === 'input' || method === 'editor') {
+      if (this.supportsElicitationForm) {
+        await this.handleExtensionTextInput(ev, id, method)
+        return
+      }
+
       this.emit({
         sessionUpdate: 'agent_message_chunk',
         content: {
           type: 'text',
-          text: `Pi ${method} UI request is not supported in ACP yet; cancelling it.`
+          text: `Pi ${method} UI request is not supported by this client; cancelling it.`
         } satisfies ContentBlock
       })
       await this.proc.sendExtensionUiResponse({ id, cancelled: true })
@@ -1139,6 +1151,47 @@ export class PiAcpSession {
     }
 
     await this.proc.sendExtensionUiResponse({ id, confirmed: selected.outcome.optionId === 'yes' })
+  }
+
+  // Maps pi's `input`/`editor` UI requests to ACP's unstable `session/create_elicitation` (form
+  // mode, single string field), the only ACP mechanism for free-text prompts. Only called when
+  // the client advertised `clientCapabilities.elicitation.form` at initialize.
+  private async handleExtensionTextInput(ev: PiRpcEvent, id: string, method: 'input' | 'editor'): Promise<void> {
+    const title = stringProp(ev, 'title') ?? (method === 'editor' ? 'Edit text' : 'Enter a value')
+    const placeholder = stringProp(ev, 'placeholder')
+    const prefill = stringProp(ev, 'prefill')
+
+    let response: CreateElicitationResponse
+    try {
+      response = await this.conn.unstable_createElicitation({
+        mode: 'form',
+        sessionId: this.sessionId,
+        message: title,
+        requestedSchema: {
+          type: 'object',
+          properties: {
+            value: {
+              type: 'string',
+              title,
+              description: method === 'input' && placeholder ? `e.g. ${placeholder}` : undefined,
+              default: method === 'editor' ? (prefill ?? undefined) : undefined
+            }
+          },
+          required: ['value']
+        }
+      })
+    } catch {
+      await this.proc.sendExtensionUiResponse({ id, cancelled: true })
+      return
+    }
+
+    const value = response.action === 'accept' ? response.content?.['value'] : null
+    if (typeof value !== 'string') {
+      await this.proc.sendExtensionUiResponse({ id, cancelled: true })
+      return
+    }
+
+    await this.proc.sendExtensionUiResponse({ id, value })
   }
 
   private async requestExtensionPermission(
