@@ -1015,7 +1015,27 @@ export class PiAcpSession {
         break
       }
 
-      case 'auto_compaction_start': {
+      case 'extension_error': {
+        const extensionPath = stringProp(ev, 'extensionPath')
+        const hookEvent = stringProp(ev, 'event')
+        const error = stringProp(ev, 'error') ?? 'unknown error'
+        const source = extensionPath ? `${extensionPath} (${hookEvent ?? 'unknown hook'})` : (hookEvent ?? 'extension')
+
+        this.emit({
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: `Extension error in ${source}: ${error}` } satisfies ContentBlock,
+          _meta: { piAcp: { notify: { level: 'warning' } } }
+        })
+        break
+      }
+
+      // pi renamed `auto_compaction_start`/`auto_compaction_end` to `compaction_start`/`compaction_end`
+      // (with a `reason` field: 'manual' | 'threshold' | 'overflow') in pi v0.63.1. `reason: 'manual'`
+      // is skipped here because the `/compact` slash command already reports its own result from
+      // the RPC response (see agent.ts); only threshold/overflow compaction needs a message here.
+      case 'compaction_start': {
+        if (stringProp(ev, 'reason') === 'manual') break
+
         this.emit({
           sessionUpdate: 'agent_message_chunk',
           content: {
@@ -1026,13 +1046,20 @@ export class PiAcpSession {
         break
       }
 
-      case 'auto_compaction_end': {
+      case 'compaction_end': {
+        if (stringProp(ev, 'reason') === 'manual') break
+
+        const aborted = ev.aborted === true
+        const errorMessage = stringProp(ev, 'errorMessage')
+        const text = aborted
+          ? 'Automatic compaction was aborted.'
+          : errorMessage
+            ? `Automatic compaction failed: ${errorMessage}`
+            : 'Automatic compaction finished; context was summarized to continue the session.'
+
         this.emit({
           sessionUpdate: 'agent_message_chunk',
-          content: {
-            type: 'text',
-            text: 'Automatic compaction finished; context was summarized to continue the session.'
-          } satisfies ContentBlock
+          content: { type: 'text', text } satisfies ContentBlock
         })
         break
       }
@@ -1107,11 +1134,12 @@ export class PiAcpSession {
         content: { type: 'text', text: stringProp(ev, 'message') ?? 'Pi notification' } satisfies ContentBlock,
         _meta: { piAcp: { notify: { level: stringProp(ev, 'notifyType') ?? 'info' } } }
       })
-      await this.proc.sendExtensionUiResponse({ id, cancelled: true })
       return
     }
 
-    await this.proc.sendExtensionUiResponse({ id, cancelled: true })
+    // `setStatus`, `setWidget`, `setTitle`, `set_editor_text`, and any other fire-and-forget method:
+    // pi does not expect an `extension_ui_response` for these (see docs/rpc.md), unlike the dialog
+    // methods handled above.
   }
 
   private async handleExtensionSelect(ev: PiRpcEvent, id: string): Promise<void> {

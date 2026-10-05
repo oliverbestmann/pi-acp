@@ -516,7 +516,7 @@ test('PiAcpSession: emits agent_message_chunk for auto_retry_end', async () => {
   })
 })
 
-test('PiAcpSession: emits agent_message_chunk for auto_compaction_start', async () => {
+test('PiAcpSession: emits agent_message_chunk for compaction_start with a non-manual reason', async () => {
   const conn = new FakeAgentSideConnection()
   const proc = new FakePiRpcProcess()
 
@@ -529,7 +529,7 @@ test('PiAcpSession: emits agent_message_chunk for auto_compaction_start', async 
     fileCommands: []
   })
 
-  proc.emit({ type: 'auto_compaction_start' } as any)
+  proc.emit({ type: 'compaction_start', reason: 'threshold' })
 
   await new Promise(r => setTimeout(r, 0))
 
@@ -540,7 +540,7 @@ test('PiAcpSession: emits agent_message_chunk for auto_compaction_start', async 
   })
 })
 
-test('PiAcpSession: emits agent_message_chunk for auto_compaction_end', async () => {
+test('PiAcpSession: emits agent_message_chunk for compaction_end with a non-manual reason', async () => {
   const conn = new FakeAgentSideConnection()
   const proc = new FakePiRpcProcess()
 
@@ -553,7 +553,7 @@ test('PiAcpSession: emits agent_message_chunk for auto_compaction_end', async ()
     fileCommands: []
   })
 
-  proc.emit({ type: 'auto_compaction_end' } as any)
+  proc.emit({ type: 'compaction_end', reason: 'overflow' })
 
   await new Promise(r => setTimeout(r, 0))
 
@@ -565,6 +565,51 @@ test('PiAcpSession: emits agent_message_chunk for auto_compaction_end', async ()
       text: 'Automatic compaction finished; context was summarized to continue the session.'
     }
   })
+})
+
+test('PiAcpSession: reports aborted/failed compaction_end distinctly', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  proc.emit({ type: 'compaction_end', reason: 'threshold', aborted: true })
+  proc.emit({ type: 'compaction_end', reason: 'overflow', errorMessage: 'quota exceeded' })
+
+  await new Promise(r => setTimeout(r, 0))
+
+  assert.deepEqual(
+    conn.updates.map(u => (u.update as any).content.text),
+    ['Automatic compaction was aborted.', 'Automatic compaction failed: quota exceeded']
+  )
+})
+
+test('PiAcpSession: skips compaction_start/compaction_end messages for manual /compact (avoids duplicate feedback)', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  proc.emit({ type: 'compaction_start', reason: 'manual' })
+  proc.emit({ type: 'compaction_end', reason: 'manual' })
+
+  await new Promise(r => setTimeout(r, 0))
+
+  assert.equal(conn.updates.length, 0)
 })
 
 test('PiAcpSession: preserves ordering when auto_retry_start is interleaved with text_delta events', async () => {
@@ -993,7 +1038,7 @@ test('PiAcpSession: tags extension notify chunks with severity in _meta', async 
     content: { type: 'text', text: 'MCP: connection failed' },
     _meta: { piAcp: { notify: { level: 'error' } } }
   })
-  assert.deepEqual(proc.extensionUiResponses[0], { id: 'n1', cancelled: true })
+  assert.deepEqual(proc.extensionUiResponses, [])
 })
 
 test('PiAcpSession: defaults notify severity to info when notifyType is absent', async () => {
@@ -1222,4 +1267,61 @@ test('PiAcpSession: cancelled turn still reports cancelled after usage publish',
     conn.updates.filter(u => u.update.sessionUpdate === 'usage_update').map(u => u.update),
     [{ sessionUpdate: 'usage_update', used: 42, size: 100 }]
   )
+})
+
+test('PiAcpSession: does not send a response for fire-and-forget UI requests (setStatus)', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  proc.emit({
+    type: 'extension_ui_request',
+    id: 's1-ui',
+    method: 'setStatus',
+    statusKey: 'ext',
+    statusText: 'Running...'
+  })
+
+  await new Promise(r => setTimeout(r, 0))
+
+  assert.deepEqual(proc.extensionUiResponses, [])
+  assert.equal(conn.updates.length, 0)
+})
+
+test('PiAcpSession: surfaces extension_error as a visible agent_message_chunk', async () => {
+  const conn = new FakeAgentSideConnection()
+  const proc = new FakePiRpcProcess()
+
+  new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: []
+  })
+
+  proc.emit({
+    type: 'extension_error',
+    extensionPath: '/path/to/extension.ts',
+    event: 'tool_call',
+    error: 'boom'
+  })
+
+  await new Promise(r => setTimeout(r, 0))
+
+  assert.equal(conn.updates.length, 1)
+  assert.deepEqual(conn.updates[0]!.update, {
+    sessionUpdate: 'agent_message_chunk',
+    content: { type: 'text', text: 'Extension error in /path/to/extension.ts (tool_call): boom' },
+    _meta: { piAcp: { notify: { level: 'warning' } } }
+  })
 })

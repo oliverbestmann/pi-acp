@@ -21,7 +21,9 @@ import {
   type SetSessionModeResponse,
   type StopReason,
   type DeleteSessionRequest,
-  type DeleteSessionResponse
+  type DeleteSessionResponse,
+  type CloseSessionRequest,
+  type CloseSessionResponse
 } from '@agentclientprotocol/sdk'
 import { getAuthMethods } from './auth.js'
 import { SessionManager, type PiAcpSession } from './session.js'
@@ -273,7 +275,8 @@ export class PiAcpAgent implements ACPAgent {
           // **UNSTABLE** ACP capability used by Zed's codex-acp adapter.
           // Enables a native session picker in clients that support it.
           list: {},
-          delete: {}
+          delete: {},
+          close: {}
         }
       }
     }
@@ -1141,6 +1144,9 @@ export class PiAcpAgent implements ACPAgent {
 
     const sessionFile = stored?.sessionFile ?? piSession?.sessionFile
 
+    // Kill the live pi subprocess (if any) before removing its session file out from under it.
+    this.sessions.close(params.sessionId)
+
     if (sessionFile) {
       try {
         if (existsSync(sessionFile)) unlinkSync(sessionFile)
@@ -1151,6 +1157,17 @@ export class PiAcpAgent implements ACPAgent {
 
     this.store.delete(params.sessionId)
 
+    return {}
+  }
+
+  /**
+   * Frees the pi subprocess backing a session without deleting its session file, so the
+   * conversation can still be resumed later via `session/load`. Without this, a session's `pi`
+   * process would otherwise stay alive for the lifetime of the whole ACP connection, even after
+   * the client closes that conversation's tab.
+   */
+  async closeSession(params: CloseSessionRequest): Promise<CloseSessionResponse> {
+    this.sessions.close(params.sessionId)
     return {}
   }
 
