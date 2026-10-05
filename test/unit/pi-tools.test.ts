@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { toolResultToText, toolTitle } from '../../src/acp/translate/pi-tools.js'
+import { toolInputContent, toolResultToText, toolTitle } from '../../src/acp/translate/pi-tools.js'
 
 test('toolTitle: describes file, search, and custom tool inputs', () => {
   assert.equal(toolTitle('read', { path: 'src/acp/session.ts' }), 'read src/acp/session.ts')
@@ -9,6 +9,10 @@ test('toolTitle: describes file, search, and custom tool inputs', () => {
   assert.equal(toolTitle('fetch_url', { url: 'https://example.test' }), 'fetch_url https://example.test')
   assert.equal(toolTitle('go_doc', { target: 'fmt.Println' }), 'go_doc fmt.Println')
   assert.equal(toolTitle('memory', { action: 'search', query: 'pi tool titles' }), 'memory search "pi tool titles"')
+  assert.equal(
+    toolTitle('mcp', { tool: 'jflow_commit', args: { message: 'test', path: '/home/oliver/github/jflow' } }),
+    'mcp jflow_commit /home/oliver/github/jflow'
+  )
 })
 
 test('toolTitle: ignores unsafe or incomplete input and bounds titles', () => {
@@ -16,6 +20,37 @@ test('toolTitle: ignores unsafe or incomplete input and bounds titles', () => {
   assert.equal(toolTitle('grep', { partialArgs: '{"pattern":' }), 'grep')
   assert.equal(toolTitle('custom', { target: { nested: true } }), 'custom')
   assert.equal(toolTitle('read', { path: 'x'.repeat(200) }).length, 160)
+})
+
+test('toolInputContent: renders question options as wrapped text, not raw JSON', () => {
+  const content = toolInputContent('ask_user_question', {
+    questions: [
+      {
+        question: 'Which approach?',
+        options: [
+          { label: 'A', description: 'Do the simple thing' },
+          { label: 'B', description: 'Do the complex thing' }
+        ]
+      }
+    ]
+  })
+
+  assert.deepEqual(content, [
+    {
+      type: 'content',
+      content: {
+        type: 'text',
+        text: 'Which approach?\n1. A — Do the simple thing\n2. B — Do the complex thing'
+      }
+    }
+  ])
+})
+
+test('toolInputContent: ignores unrelated tools and empty/malformed args', () => {
+  assert.equal(toolInputContent('read', { path: 'a.ts' }), undefined)
+  assert.equal(toolInputContent('ask_user_question', {}), undefined)
+  assert.equal(toolInputContent('ask_user_question', { questions: [] }), undefined)
+  assert.equal(toolInputContent('ask_user_question', null), undefined)
 })
 
 test('toolResultToText: extracts text from content blocks', () => {

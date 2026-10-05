@@ -2,6 +2,7 @@ import type {
   AgentSideConnection,
   ContentBlock,
   CreateElicitationResponse,
+  EnumOption,
   McpServer,
   PermissionOption,
   SessionUpdate,
@@ -34,7 +35,8 @@ import {
   capBashOutput,
   isBashTool
 } from './translate/bash.js'
-import { toolResultToText, toolTitle } from './translate/pi-tools.js'
+import { toolInputContent, toolResultToText, toolTitle } from './translate/pi-tools.js'
+import { customMessageToolCall } from './translate/pi-messages.js'
 
 type SessionCreateParams = {
   cwd: string
@@ -805,7 +807,8 @@ export class PiAcpSession {
                 kind: toToolKind(toolName),
                 status,
                 locations,
-                rawInput
+                rawInput,
+                content: toolInputContent(toolName, rawInput)
               })
             } else {
               // Best-effort: keep rawInput updated while args are streaming.
@@ -816,7 +819,8 @@ export class PiAcpSession {
                 title: toolTitle(toolName, rawInput),
                 status,
                 locations,
-                rawInput
+                rawInput,
+                content: toolInputContent(toolName, rawInput)
               })
             }
           }
@@ -825,6 +829,12 @@ export class PiAcpSession {
         }
 
         // Ignore other delta/event types for now.
+        break
+      }
+
+      case 'message_start': {
+        const update = customMessageToolCall((ev as any).message)
+        if (update) this.emit(update)
         break
       }
 
@@ -887,7 +897,8 @@ export class PiAcpSession {
             kind: toToolKind(toolName),
             status: 'in_progress',
             locations,
-            rawInput: args
+            rawInput: args,
+            content: toolInputContent(toolName, args)
           })
         } else {
           this.currentToolCalls.set(toolCallId, 'in_progress')
@@ -897,7 +908,8 @@ export class PiAcpSession {
             title: toolTitle(toolName, args),
             status: 'in_progress',
             locations,
-            rawInput: args
+            rawInput: args,
+            content: toolInputContent(toolName, args)
           })
         }
 
@@ -1142,11 +1154,21 @@ export class PiAcpSession {
     // methods handled above.
   }
 
+  // pi's built-in `select` UI flattens each option into one `"label — description"` string
+  // (its `ctx.ui.select()` only accepts plain strings). We split that back apart so ACP clients
+  // that support elicitation forms can render a proper wrapped option list (title + description
+  // on separate lines) instead of squeezing the whole string into one unwrapped permission
+  // button label.
   private async handleExtensionSelect(ev: PiRpcEvent, id: string): Promise<void> {
     const rawOptions = ev.options
     const options = Array.isArray(rawOptions) ? rawOptions.map(option => String(option)) : []
     if (!options.length) {
       await this.proc.sendExtensionUiResponse({ id, cancelled: true })
+      return
+    }
+
+    if (this.supportsElicitationForm) {
+      await this.handleExtensionSelectViaElicitation(ev, id, options)
       return
     }
 
@@ -1165,6 +1187,45 @@ export class PiAcpSession {
     const index = selectedOptionId === null ? null : optionIndex(selectedOptionId)
     const value = index === null ? null : (options.at(index) ?? null)
     await this.proc.sendExtensionUiResponse(value === null ? { id, cancelled: true } : { id, value })
+  }
+
+  private async handleExtensionSelectViaElicitation(ev: PiRpcEvent, id: string, options: string[]): Promise<void> {
+    const title = stringProp(ev, 'title') ?? 'Choose an option'
+
+    // `EnumOption.description` is supported by ACP clients (incl. Zed) but missing from the
+    // `@agentclientprotocol/sdk` types we currently depend on; the field still round-trips fine
+    // over the JSON-RPC wire, so we widen the type locally instead of bumping the (major-version
+    // behind) SDK dependency just for this.
+    const oneOf = options.map(option => {
+      const { title: optionTitle, description } = splitSelectOption(option)
+      return { const: option, title: optionTitle, description } as unknown as EnumOption
+    })
+
+    let response: CreateElicitationResponse
+    try {
+      response = await this.conn.unstable_createElicitation({
+        mode: 'form',
+        sessionId: this.sessionId,
+        message: title,
+        requestedSchema: {
+          type: 'object',
+          properties: {
+            value: {
+              type: 'string',
+              title,
+              oneOf
+            }
+          },
+          required: ['value']
+        }
+      })
+    } catch {
+      await this.proc.sendExtensionUiResponse({ id, cancelled: true })
+      return
+    }
+
+    const value = response.action === 'accept' ? response.content?.['value'] : null
+    await this.proc.sendExtensionUiResponse(typeof value === 'string' ? { id, value } : { id, cancelled: true })
   }
 
   private async handleExtensionConfirm(ev: PiRpcEvent, id: string): Promise<void> {
@@ -1256,6 +1317,21 @@ function extensionUiToolCall(id: string, ev: PiRpcEvent) {
     status: 'pending' as const,
     rawInput
   }
+}
+
+// Splits pi's flattened "label — description" select option text (see e.g. the built-in
+// ask_user_question tool) into a short title and an optional longer description, so ACP
+// clients that support elicitation forms can render a proper wrapped option list instead of
+// a single unwrapped button/line. Falls back to using the whole string as the title.
+const OPTION_TITLE_DESCRIPTION_SEPARATOR = ' — '
+
+function splitSelectOption(text: string): { title: string; description?: string } {
+  const separatorIndex = text.indexOf(OPTION_TITLE_DESCRIPTION_SEPARATOR)
+  if (separatorIndex === -1) return { title: text }
+
+  const title = text.slice(0, separatorIndex).trim()
+  const description = text.slice(separatorIndex + OPTION_TITLE_DESCRIPTION_SEPARATOR.length).trim()
+  return title ? { title, description: description || undefined } : { title: text }
 }
 
 function stringProp(source: Record<string, unknown>, key: string): string | null {

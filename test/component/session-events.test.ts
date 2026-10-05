@@ -225,6 +225,71 @@ test('PiAcpSession: handles extension select via ACP permission request', async 
   assert.deepEqual(proc.extensionUiResponses, [{ id: 'ui-1', value: 'Beta' }])
 })
 
+test('PiAcpSession: maps select UI requests to an ACP elicitation single-select when supported', async () => {
+  const conn = new FakeAgentSideConnection()
+  conn.nextElicitationResponse = {
+    action: 'accept',
+    content: { value: '2. cachetools TTLCache — third-party dict-like cache with expiry' }
+  }
+  const proc = new FakePiRpcProcess()
+
+  new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: [],
+    supportsElicitationForm: true
+  })
+
+  proc.emit({
+    type: 'extension_ui_request',
+    id: 'ui-1',
+    method: 'select',
+    title: 'Pick a cache',
+    options: [
+      '1. functools.lru_cache decorator — stdlib one-liner, in-memory only',
+      '2. cachetools TTLCache — third-party dict-like cache with expiry',
+      'No description here'
+    ]
+  })
+
+  await new Promise(r => setTimeout(r, 0))
+
+  assert.equal(conn.elicitationRequests.length, 1)
+  assert.deepEqual((conn.elicitationRequests[0] as any).requestedSchema.properties.value.oneOf, [
+    { const: '1. functools.lru_cache decorator — stdlib one-liner, in-memory only', title: '1. functools.lru_cache decorator', description: 'stdlib one-liner, in-memory only' },
+    { const: '2. cachetools TTLCache — third-party dict-like cache with expiry', title: '2. cachetools TTLCache', description: 'third-party dict-like cache with expiry' },
+    { const: 'No description here', title: 'No description here', description: undefined }
+  ])
+  assert.deepEqual(proc.extensionUiResponses, [
+    { id: 'ui-1', value: '2. cachetools TTLCache — third-party dict-like cache with expiry' }
+  ])
+})
+
+test('PiAcpSession: cancels select UI request when elicitation is declined', async () => {
+  const conn = new FakeAgentSideConnection()
+  conn.nextElicitationResponse = { action: 'decline' }
+  const proc = new FakePiRpcProcess()
+
+  new PiAcpSession({
+    sessionId: 's1',
+    cwd: process.cwd(),
+    mcpServers: [],
+    proc: proc as any,
+    conn: asAgentConn(conn),
+    fileCommands: [],
+    supportsElicitationForm: true
+  })
+
+  proc.emit({ type: 'extension_ui_request', id: 'ui-1', method: 'select', title: 'Pick one', options: ['Alpha', 'Beta'] })
+
+  await new Promise(r => setTimeout(r, 0))
+
+  assert.deepEqual(proc.extensionUiResponses, [{ id: 'ui-1', cancelled: true }])
+})
+
 test('PiAcpSession: handles extension confirm via ACP permission request', async () => {
   const conn = new FakeAgentSideConnection()
   conn.nextPermissionResponse = { outcome: { outcome: 'selected', optionId: 'no' } }

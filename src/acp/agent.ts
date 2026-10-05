@@ -30,7 +30,7 @@ import { SessionManager, type PiAcpSession } from './session.js'
 import { SessionStore } from './session-store.js'
 import { PiRpcProcess } from '../pi-rpc/process.js'
 import { listPiSessions, findPiSession, readPiSessionTitle } from './pi-sessions.js'
-import { normalizePiAssistantText, normalizePiMessageText } from './translate/pi-messages.js'
+import { customMessageToolCall, normalizePiAssistantText, normalizePiMessageText } from './translate/pi-messages.js'
 import { toolResultToText } from './translate/pi-tools.js'
 import {
   bashCommand,
@@ -992,6 +992,12 @@ export class PiAcpAgent implements ACPAgent {
 
     for (const m of messages) {
       const role = String(m?.role ?? '')
+
+      const custom = customMessageToolCall(m)
+      if (custom) {
+        await this.conn.sessionUpdate({ sessionId: session.sessionId, update: custom })
+        continue
+      }
 
       if (role === 'user') {
         const text = normalizePiMessageText(m?.content)

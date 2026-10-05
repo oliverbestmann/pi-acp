@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizePiAssistantText, normalizePiMessageText } from '../../src/acp/translate/pi-messages.js'
+import {
+  customMessageToolCall,
+  normalizePiAssistantText,
+  normalizePiMessageText
+} from '../../src/acp/translate/pi-messages.js'
 
 test('normalizePiMessageText: supports string', () => {
   assert.equal(normalizePiMessageText('hello'), 'hello')
@@ -26,4 +30,21 @@ test('normalizePiAssistantText: joins only text blocks', () => {
     ]),
     'hi!'
   )
+})
+
+test('customMessageToolCall: maps displayed custom messages to tool calls', () => {
+  const m = {
+    role: 'custom',
+    customType: 'go-check',
+    display: true,
+    timestamp: 1,
+    content: 'boom',
+    details: { title: 'go vet', isError: true }
+  }
+  const u = customMessageToolCall(m)!
+  assert.equal(u.title, 'go vet')
+  assert.equal(u.status, 'failed')
+  assert.deepEqual(u.content, [{ type: 'content', content: { type: 'text', text: 'boom' } }])
+  assert.equal(customMessageToolCall({ ...m, display: false }), undefined)
+  assert.equal(customMessageToolCall({ role: 'user', content: 'x' }), undefined)
 })

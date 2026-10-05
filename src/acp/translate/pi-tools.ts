@@ -38,6 +38,47 @@ function truncateToolOutput(text: string): string {
   return `${head}\n\n...(truncated ${omitted} characters)...\n\n${tail}`
 }
 
+// Tools that ask the user to pick from a list of options (optionally with a free-text
+// "other" answer). Their JSON args render unreadably as a raw-JSON fallback in ACP clients
+// (each long option description becomes one unwrapped line), so we give them a proper
+// wrapped text content block instead.
+const QUESTION_TOOL_NAMES = new Set(['ask_user_question', 'questionnaire'])
+
+export function toolInputContent(toolName: string, args: unknown): { type: 'content'; content: { type: 'text'; text: string } }[] | undefined {
+  if (!QUESTION_TOOL_NAMES.has(toolName)) return undefined
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return undefined
+
+  const questions = (args as Record<string, unknown>).questions
+  if (!Array.isArray(questions) || !questions.length) return undefined
+
+  const lines: string[] = []
+  for (const q of questions) {
+    if (!q || typeof q !== 'object') continue
+    const question = q as Record<string, unknown>
+
+    const text = titleValue(question.question) ?? titleValue(question.prompt)
+    if (text) {
+      if (lines.length) lines.push('')
+      lines.push(text)
+    }
+
+    const options = question.options
+    if (!Array.isArray(options)) continue
+
+    options.forEach((opt, i) => {
+      if (!opt || typeof opt !== 'object') return
+      const option = opt as Record<string, unknown>
+      const label = titleValue(option.label) ?? titleValue(option.value)
+      if (!label) return
+      const description = titleValue(option.description)
+      lines.push(`${i + 1}. ${label}${description ? ` — ${description}` : ''}`)
+    })
+  }
+
+  if (!lines.length) return undefined
+  return [{ type: 'content', content: { type: 'text', text: lines.join('\n') } }]
+}
+
 export function toolTitle(toolName: string, args: unknown): string {
   if (!args || typeof args !== 'object' || Array.isArray(args)) return toolName
 
@@ -47,6 +88,10 @@ export function toolTitle(toolName: string, args: unknown): string {
     const scope = titleValue(input.path) ?? titleValue(input.glob)
     return truncateTitle(`${toolName} ${JSON.stringify(pattern)}${scope ? ` in ${scope}` : ''}`)
   }
+
+  // MCP gateway calls wrap the real tool: { tool: "jflow_commit", args: {...} }.
+  const innerTool = toolName === 'mcp' ? titleValue(input.tool) : undefined
+  if (innerTool) return truncateTitle(`${toolName} ${toolTitle(innerTool, input.args)}`)
 
   const action = titleValue(input.action)
   const query = titleValue(input.query)
